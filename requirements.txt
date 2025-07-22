@@ -5,3 +5,5 @@ xgboost
 shap
 matplotlib
 jira
+python-dotenv
+streamlit
