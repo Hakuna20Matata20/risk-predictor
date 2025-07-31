@@ -20,8 +20,7 @@ CF_SPENT_H    = "customfield_10047"  # Time Spent Hours
 
 def get_jira_client() -> JIRA:
     """
-    Create and return a JIRA client.
-    Lazy initialization to avoid blocking at import.
+    Create and return a JIRA client. Lazy initialization to avoid blocking at import.
     """
     return JIRA(
         server=JIRA_URL,
@@ -40,7 +39,7 @@ def fetch_project_metrics(project_key: str, max_results: int = 1000) -> pd.DataF
       - time_spent_h (sum of Time Spent Hours)
     Returns a single-row DataFrame.
     """
-    # Lazy initialize within function
+    # Lazy initialize JIRA client
     jira = get_jira_client()
 
     # Fetch all issues with changelog for reopen count
