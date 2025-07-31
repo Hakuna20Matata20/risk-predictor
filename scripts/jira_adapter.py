@@ -1,3 +1,4 @@
+```python
 # scripts/jira_adapter.py
 
 import os
@@ -5,36 +6,50 @@ from dotenv import load_dotenv
 import pandas as pd
 from jira import JIRA
 
-# 1) Завантажуємо змінні з .env
-load_dotenv()  # шукає файл .env у корені
-
+# Load environment variables
+load_dotenv()
 JIRA_URL    = os.getenv("JIRA_URL")
 JIRA_EMAIL  = os.getenv("JIRA_EMAIL")
 JIRA_TOKEN  = os.getenv("JIRA_TOKEN")
 PROJECT_KEY = os.getenv("PROJECT_KEY")
 
-# 2) Підключаємося до Jira
-jira = JIRA(server=JIRA_URL, basic_auth=(JIRA_EMAIL, JIRA_TOKEN))
+# Custom field IDs
+CF_ESTIMATE_H = "customfield_10046"  # Estimate Hours
+CF_SPENT_H    = "customfield_10047"  # Time Spent Hours
 
-def fetch_project_metrics(project_key: str, max_results: int = 1000) -> dict:
+
+def get_jira_client() -> JIRA:
     """
-    Завантажує метрики по всіх Issue та по Bug-типам окремо.
-    Повертає словник:
-      - project_name  : ключ проекту
-      - tasks_count   : загальна кількість Issue
-      - bug_count     : кількість типу Bug
-      - changes_count : сумарна кількість переходів у Reopened
-      - estimate_h    : сума Original Estimate у годинах
-      - time_spent_h  : сума Time Spent у годинах
+    Create and return a JIRA client.
+    Lazy initialization to avoid blocking at import.
     """
-    # всі Issue з changelog
+    return JIRA(
+        server=JIRA_URL,
+        basic_auth=(JIRA_EMAIL, JIRA_TOKEN),
+        options={"rest_api_timeout": 20}
+    )
+
+
+def fetch_project_metrics(project_key: str, max_results: int = 1000) -> pd.DataFrame:
+    """
+    Fetch project metrics:
+      - tasks_count
+      - bug_count
+      - changes_count (reopened)
+      - estimate_h (sum of Estimate Hours)
+      - time_spent_h (sum of Time Spent Hours)
+    Returns a single-row DataFrame.
+    """
+    # Lazy initialize within function
+    jira = get_jira_client()
+
+    # Fetch all issues with changelog for reopen count
     all_issues = jira.search_issues(
         f"project = {project_key}",
         maxResults=max_results,
         expand="changelog"
     )
-
-    # окремий запит для Bug-ів
+    # Fetch only bugs
     bug_issues = jira.search_issues(
         f"project = {project_key} AND issuetype = Bug",
         maxResults=max_results
@@ -43,42 +58,29 @@ def fetch_project_metrics(project_key: str, max_results: int = 1000) -> dict:
     tasks_count  = len(all_issues)
     bug_count    = len(bug_issues)
     reopened_cnt = 0
-    total_est    = 0
-    total_spent  = 0
+    total_est    = 0.0
+    total_spent  = 0.0
 
     for iss in all_issues:
-        # лічимо Reopened transitions
-        for hist in iss.changelog.histories:
-            for itm in hist.items:
-                if itm.field == "status" and itm.toString.lower() == "reopened":
+        # Count reopened transitions
+        for history in iss.changelog.histories:
+            for item in history.items:
+                if item.field == "status" and item.toString.lower() == "reopened":
                     reopened_cnt += 1
+        # Read custom fields
+        fields = iss.fields
+        est_val   = getattr(fields, CF_ESTIMATE_H, 0) or 0
+        spent_val = getattr(fields, CF_SPENT_H,    0) or 0
+        total_est   += float(est_val)
+        total_spent += float(spent_val)
 
-        # збираємо Original Estimate та Time Spent (в секундах)
-        est = iss.fields.timeoriginalestimate or 0
-        spent = iss.fields.timespent or 0
-        total_est   += est
-        total_spent += spent
-
-    # конвертуємо в години
-    estimate_h   = total_est   / 3600.0
-    time_spent_h = total_spent / 3600.0
-
-    return {
+    data = {
         "project_name":   project_key,
         "tasks_count":    tasks_count,
         "bug_count":      bug_count,
         "changes_count":  reopened_cnt,
-        "estimate_h":     estimate_h,
-        "time_spent_h":   time_spent_h
+        "estimate_h":     total_est,
+        "time_spent_h":   total_spent
     }
-
-if __name__ == "__main__":
-    # 3) Викликаємо збір метрик і зберігаємо в CSV
-    metrics = fetch_project_metrics(PROJECT_KEY)
-    df = pd.DataFrame([metrics])
-
-    os.makedirs("data", exist_ok=True)
-    out_path = "data/jira_metrics.csv"
-    df.to_csv(out_path, index=False)
-    print(f"✅ Jira metrics exported to {out_path} (n_projects=1)")
-
+    return pd.DataFrame([data])
+```
